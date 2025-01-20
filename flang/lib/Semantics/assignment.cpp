@@ -44,8 +44,7 @@ public:
   void Analyze(const parser::ConcurrentControl &);
 
 private:
-  bool CheckForPureContext(const SomeExpr &rhs, parser::CharBlock rhsSource,
-      bool isPointerAssignment);
+  bool CheckForPureContext(const SomeExpr &rhs, parser::CharBlock rhsSource);
   void CheckShape(parser::CharBlock, const SomeExpr *);
   template <typename... A>
   parser::Message *Say(parser::CharBlock at, A &&...args) {
@@ -69,13 +68,22 @@ void AssignmentContext::Analyze(const parser::AssignmentStmt &stmt) {
     const Scope &scope{context_.FindScope(lhsLoc)};
     if (auto whyNot{WhyNotDefinable(lhsLoc, scope,
             DefinabilityFlags{DefinabilityFlag::VectorSubscriptIsOk}, lhs)}) {
-      if (auto *msg{Say(lhsLoc,
-              "Left-hand side of assignment is not definable"_err_en_US)}) {
-        msg->Attach(std::move(*whyNot));
+      if (whyNot->IsFatal()) {
+        if (auto *msg{Say(lhsLoc,
+                "Left-hand side of assignment is not definable"_err_en_US)}) {
+          msg->Attach(
+              std::move(whyNot->set_severity(parser::Severity::Because)));
+        }
+      } else {
+        context_.Say(std::move(*whyNot));
       }
     }
     auto rhsLoc{std::get<parser::Expr>(stmt.t).source};
-    CheckForPureContext(rhs, rhsLoc, false);
+    if (std::holds_alternative<evaluate::ProcedureRef>(assignment->u)) {
+      // it's a defined ASSIGNMENT(=)
+    } else {
+      CheckForPureContext(rhs, rhsLoc);
+    }
     if (whereDepth_ > 0) {
       CheckShape(lhsLoc, &lhs);
     }
@@ -85,12 +93,9 @@ void AssignmentContext::Analyze(const parser::AssignmentStmt &stmt) {
 void AssignmentContext::Analyze(const parser::PointerAssignmentStmt &stmt) {
   CHECK(whereDepth_ == 0);
   if (const evaluate::Assignment * assignment{GetAssignment(stmt)}) {
-    const SomeExpr &rhs{assignment->rhs};
-    CheckForPureContext(rhs, std::get<parser::Expr>(stmt.t).source, true);
     parser::CharBlock at{context_.location().value()};
     auto restorer{foldingContext().messages().SetLocation(at)};
-    const Scope &scope{context_.FindScope(at)};
-    CheckPointerAssignment(foldingContext(), *assignment, scope);
+    CheckPointerAssignment(context_, *assignment, context_.FindScope(at));
   }
 }
 
@@ -125,28 +130,16 @@ bool CheckCopyabilityInPureScope(parser::ContextualMessages &messages,
   return true;
 }
 
-bool AssignmentContext::CheckForPureContext(const SomeExpr &rhs,
-    parser::CharBlock rhsSource, bool isPointerAssignment) {
+bool AssignmentContext::CheckForPureContext(
+    const SomeExpr &rhs, parser::CharBlock rhsSource) {
   const Scope &scope{context_.FindScope(rhsSource)};
-  if (!FindPureProcedureContaining(scope)) {
+  if (FindPureProcedureContaining(scope)) {
+    parser::ContextualMessages messages{
+        context_.location().value(), &context_.messages()};
+    return CheckCopyabilityInPureScope(messages, rhs, scope);
+  } else {
     return true;
   }
-  parser::ContextualMessages messages{
-      context_.location().value(), &context_.messages()};
-  if (isPointerAssignment) {
-    if (const Symbol * base{GetFirstSymbol(rhs)}) {
-      if (const char *why{WhyBaseObjectIsSuspicious(
-              base->GetUltimate(), scope)}) { // C1594(3)
-        evaluate::SayWithDeclaration(messages, *base,
-            "A pure subprogram may not use '%s' as the target of pointer assignment because it is %s"_err_en_US,
-            base->name(), why);
-        return false;
-      }
-    }
-  } else {
-    return CheckCopyabilityInPureScope(messages, rhs, scope);
-  }
-  return true;
 }
 
 // 10.2.3.1(2) The masks and LHS of assignments must be arrays of the same shape

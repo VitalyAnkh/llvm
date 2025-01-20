@@ -9,25 +9,23 @@
 #include "SchedulerTest.hpp"
 #include "SchedulerTestUtils.hpp"
 
-#include <helpers/PiMock.hpp>
 #include <helpers/ScopedEnvVar.hpp>
 #include <helpers/TestKernel.hpp>
+#include <helpers/UrMock.hpp>
+
+#include <sycl/usm.hpp>
 
 #include <vector>
 
+namespace {
 using namespace sycl;
 using EventImplPtr = std::shared_ptr<detail::event_impl>;
 
-constexpr auto DisablePostEnqueueCleanupName =
-    "SYCL_DISABLE_POST_ENQUEUE_CLEANUP";
+constexpr auto DisableCleanupName = "SYCL_DISABLE_EXECUTION_GRAPH_CLEANUP";
 
-std::vector<std::pair<pi_uint32, const pi_event *>> PassedNumEvents;
+std::vector<std::pair<uint32_t, const ur_event_handle_t *>> PassedNumEvents;
 
 bool CheckTestExecutionRequirements(const platform &plt) {
-  if (plt.is_host()) {
-    std::cout << "Not run due to host-only environment\n";
-    return false;
-  }
   // This test only contains device image for SPIR-V capable devices.
   if (plt.get_backend() != sycl::backend::opencl &&
       plt.get_backend() != sycl::backend::ext_oneapi_level_zero) {
@@ -42,7 +40,7 @@ enum TestCGType { KERNEL_TASK = 0x00, HOST_TASK = 0x01 };
 class DependsOnTests : public ::testing::Test {
 protected:
   void SetUp() {
-    platform Plt = Mock.getPlatform();
+    platform Plt = sycl::platform();
     if (!CheckTestExecutionRequirements(Plt))
       GTEST_SKIP();
 
@@ -58,7 +56,8 @@ protected:
     std::vector<detail::Command *> ToEnqueue;
 
     // Emulating processing of command group function
-    MockHandlerCustomFinalize MockCGH(QueueDevImpl, false);
+    MockHandlerCustomFinalize MockCGH(QueueDevImpl,
+                                      /*CallerNeedsEvent=*/true);
 
     for (auto EventImpl : Events)
       MockCGH.depends_on(detail::createSyclObjFromImpl<event>(EventImpl));
@@ -79,10 +78,10 @@ protected:
 
     std::unique_ptr<sycl::detail::CG> CmdGroup = MockCGH.finalize();
 
-    detail::Command *NewCmd = MS.addCG(
-        std::move(CmdGroup),
-        Type == TestCGType::HOST_TASK ? MS.getDefaultHostQueue() : QueueDevImpl,
-        ToEnqueue);
+    detail::Command *NewCmd =
+        MS.addCG(std::move(CmdGroup),
+                 Type == TestCGType::HOST_TASK ? nullptr : QueueDevImpl,
+                 ToEnqueue, /*EventNeeded=*/true);
     EXPECT_EQ(ToEnqueue.size(), 0u);
     return NewCmd;
   }
@@ -107,14 +106,14 @@ protected:
     std::vector<detail::Command *> BlockedCommands{Cmd2, Cmd3};
     VerifyBlockedCommandsEnqueue(Cmd1, BlockedCommands);
 
-    // One piEventsWait call:
+    // One urEventWait call:
     // kernel2 waits for kernel 1 by sending event list to enqueue launch call
     // (depending on queue property). Cmd3Event.wait() waits for kernel2 via
-    // piEventsWait.
+    // urEventWait.
     ASSERT_EQ(PassedNumEvents.size(), 1u);
     auto [EventCount, EventArr] = PassedNumEvents[0];
     ASSERT_EQ(EventCount, 1u);
-    EXPECT_EQ(*EventArr, Cmd3Event->getHandleRef());
+    EXPECT_EQ(*EventArr, Cmd3Event->getHandle());
   }
 
   void VerifyBlockedCommandsEnqueue(
@@ -149,10 +148,10 @@ protected:
     }
   }
 
-  unittest::PiMock Mock;
+  unittest::UrMock<> Mock;
   unittest::ScopedEnvVar DisabledCleanup{
-      DisablePostEnqueueCleanupName, "1",
-      detail::SYCLConfig<detail::SYCL_DISABLE_POST_ENQUEUE_CLEANUP>::reset};
+      DisableCleanupName, "1",
+      detail::SYCLConfig<detail::SYCL_DISABLE_EXECUTION_GRAPH_CLEANUP>::reset};
   MockScheduler MS;
 
   detail::QueueImplPtr QueueDevImpl;
@@ -163,9 +162,14 @@ protected:
   };
 };
 
+#ifdef _WIN32
+// Disabled on Windows due to flaky behavior
+// https://github.com/intel/llvm/issues/14060
+TEST_F(DependsOnTests, DISABLED_EnqueueNoMemObjTwoHostTasks) {
+#else
 TEST_F(DependsOnTests, EnqueueNoMemObjTwoHostTasks) {
+#endif
   // Checks enqueue of two dependent host tasks
-  detail::QueueImplPtr QueueHostImpl = MS.getDefaultHostQueue();
   std::vector<EventImplPtr> Events;
 
   detail::Command *Cmd1 =
@@ -288,3 +292,105 @@ TEST_F(DependsOnTests, EnqueueNoMemObjDoubleKernelDepHost) {
   std::vector<detail::Command *> BlockedCommands{Cmd2, Cmd3};
   VerifyBlockedCommandsEnqueue(Cmd1, BlockedCommands);
 }
+
+std::vector<ur_event_handle_t> EventsInWaitList;
+ur_result_t redefinedextUSMEnqueueMemcpy(void *pParams) {
+  auto params = *static_cast<ur_enqueue_usm_memcpy_params_t *>(pParams);
+  **params.pphEvent = mock::createDummyHandle<ur_event_handle_t>();
+  for (auto i = 0u; i < *params.pnumEventsInWaitList; i++) {
+    EventsInWaitList.push_back((*params.pphEventWaitList)[i]);
+  }
+  return UR_RESULT_SUCCESS;
+}
+
+ur_result_t redefinedEnqueueEventsWaitWithBarrierExt(void *pParams) {
+  auto params =
+      *static_cast<ur_enqueue_events_wait_with_barrier_ext_params_t *>(pParams);
+  **params.pphEvent = mock::createDummyHandle<ur_event_handle_t>();
+  for (auto i = 0u; i < *params.pnumEventsInWaitList; i++) {
+    EventsInWaitList.push_back((*params.pphEventWaitList)[i]);
+  }
+  return UR_RESULT_SUCCESS;
+}
+
+// https://github.com/intel/llvm/issues/15049
+#ifdef _WIN32
+TEST_F(DependsOnTests, DISABLED_ShortcutFunctionWithWaitList) {
+#else
+TEST_F(DependsOnTests, ShortcutFunctionWithWaitList) {
+#endif
+  mock::getCallbacks().set_before_callback("urEnqueueUSMMemcpy",
+                                           &redefinedextUSMEnqueueMemcpy);
+  sycl::queue Queue = detail::createSyclObjFromImpl<queue>(QueueDevImpl);
+
+  auto HostTaskEvent =
+      Queue.submit([&](sycl::handler &cgh) { cgh.host_task([=]() {}); });
+  std::shared_ptr<detail::event_impl> HostTaskEventImpl =
+      detail::getSyclObjImpl(HostTaskEvent);
+  HostTaskEvent.wait();
+  auto *Cmd = static_cast<detail::Command *>(HostTaskEventImpl->getCommand());
+  ASSERT_NE(Cmd, nullptr);
+  Cmd->MIsBlockable = true;
+  Cmd->MEnqueueStatus = detail::EnqueueResultT::SyclEnqueueBlocked;
+
+  auto SingleTaskEvent = Queue.submit([&](sycl::handler &cgh) {
+    cgh.depends_on(HostTaskEvent);
+    cgh.single_task<TestKernel<>>([] {});
+  });
+  std::shared_ptr<detail::event_impl> SingleTaskEventImpl =
+      detail::getSyclObjImpl(SingleTaskEvent);
+  EXPECT_EQ(SingleTaskEventImpl->getHandle(), nullptr);
+
+  Cmd->MEnqueueStatus = detail::EnqueueResultT::SyclEnqueueSuccess;
+  EventsInWaitList.clear();
+
+  const size_t ArraySize = 8;
+  int *FirstBuf = (int *)sycl::malloc_device(ArraySize * sizeof(int),
+                                             QueueDevImpl->get_device(),
+                                             QueueDevImpl->get_context());
+  int *SecondBuf = (int *)sycl::malloc_host(ArraySize * sizeof(int),
+                                            QueueDevImpl->get_context());
+  auto ShortcutFuncEvent = Queue.memcpy(
+      SecondBuf, FirstBuf, sizeof(int) * ArraySize, {SingleTaskEvent});
+  EXPECT_NE(SingleTaskEventImpl->getHandle(), nullptr);
+  ASSERT_EQ(EventsInWaitList.size(), 1u);
+  EXPECT_EQ(EventsInWaitList[0], SingleTaskEventImpl->getHandle());
+  Queue.wait();
+  sycl::free(FirstBuf, Queue);
+  sycl::free(SecondBuf, Queue);
+}
+
+TEST_F(DependsOnTests, BarrierWithWaitList) {
+  mock::getCallbacks().set_before_callback(
+      "urEnqueueEventsWaitWithBarrierExt",
+      &redefinedEnqueueEventsWaitWithBarrierExt);
+  sycl::queue Queue = detail::createSyclObjFromImpl<queue>(QueueDevImpl);
+
+  auto HostTaskEvent =
+      Queue.submit([&](sycl::handler &cgh) { cgh.host_task([=]() {}); });
+  std::shared_ptr<detail::event_impl> HostTaskEventImpl =
+      detail::getSyclObjImpl(HostTaskEvent);
+  HostTaskEvent.wait();
+  auto *Cmd = static_cast<detail::Command *>(HostTaskEventImpl->getCommand());
+  ASSERT_NE(Cmd, nullptr);
+  Cmd->MIsBlockable = true;
+  Cmd->MEnqueueStatus = detail::EnqueueResultT::SyclEnqueueBlocked;
+
+  auto SingleTaskEvent = Queue.submit([&](sycl::handler &cgh) {
+    cgh.depends_on(HostTaskEvent);
+    cgh.single_task<TestKernel<>>([] {});
+  });
+  std::shared_ptr<detail::event_impl> SingleTaskEventImpl =
+      detail::getSyclObjImpl(SingleTaskEvent);
+  EXPECT_EQ(SingleTaskEventImpl->getHandle(), nullptr);
+
+  Cmd->MEnqueueStatus = detail::EnqueueResultT::SyclEnqueueSuccess;
+  EventsInWaitList.clear();
+
+  Queue.ext_oneapi_submit_barrier(std::vector<sycl::event>{SingleTaskEvent});
+  EXPECT_NE(SingleTaskEventImpl->getHandle(), nullptr);
+  ASSERT_EQ(EventsInWaitList.size(), 1u);
+  EXPECT_EQ(EventsInWaitList[0], SingleTaskEventImpl->getHandle());
+  Queue.wait();
+}
+} // anonymous namespace

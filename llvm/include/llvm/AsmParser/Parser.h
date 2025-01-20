@@ -21,6 +21,7 @@
 namespace llvm {
 
 class Constant;
+class DIExpression;
 class LLVMContext;
 class MemoryBufferRef;
 class Module;
@@ -29,7 +30,7 @@ struct SlotMapping;
 class SMDiagnostic;
 class Type;
 
-typedef llvm::function_ref<std::optional<std::string>(StringRef)>
+typedef llvm::function_ref<std::optional<std::string>(StringRef, StringRef)>
     DataLayoutCallbackTy;
 
 /// This function is a main interface to the LLVM Assembly Parser. It parses
@@ -86,7 +87,7 @@ struct ParsedModuleAndIndex {
 ParsedModuleAndIndex parseAssemblyFileWithIndex(
     StringRef Filename, SMDiagnostic &Err, LLVMContext &Context,
     SlotMapping *Slots = nullptr,
-    DataLayoutCallbackTy DataLayoutCallback = [](StringRef) {
+    DataLayoutCallbackTy DataLayoutCallback = [](StringRef, StringRef) {
       return std::nullopt;
     });
 
@@ -97,7 +98,7 @@ ParsedModuleAndIndex parseAssemblyFileWithIndexNoUpgradeDebugInfo(
 
 /// This function is a main interface to the LLVM Assembly Parser. It parses
 /// an ASCII file that (presumably) contains LLVM Assembly code for a module
-/// summary. It returns a a ModuleSummaryIndex with the corresponding features.
+/// summary. It returns a ModuleSummaryIndex with the corresponding features.
 /// Note that this does not verify that the generated Index is valid, so you
 /// should run the verifier after parsing the file to check that it is okay.
 /// Parse LLVM Assembly Index from a file
@@ -127,7 +128,7 @@ parseSummaryIndexAssemblyString(StringRef AsmString, SMDiagnostic &Err);
 std::unique_ptr<Module> parseAssembly(
     MemoryBufferRef F, SMDiagnostic &Err, LLVMContext &Context,
     SlotMapping *Slots = nullptr,
-    DataLayoutCallbackTy DataLayoutCallback = [](StringRef) {
+    DataLayoutCallbackTy DataLayoutCallback = [](StringRef, StringRef) {
       return std::nullopt;
     });
 
@@ -169,7 +170,7 @@ parseSummaryIndexAssembly(MemoryBufferRef F, SMDiagnostic &Err);
 bool parseAssemblyInto(
     MemoryBufferRef F, Module *M, ModuleSummaryIndex *Index, SMDiagnostic &Err,
     SlotMapping *Slots = nullptr,
-    DataLayoutCallbackTy DataLayoutCallback = [](StringRef) {
+    DataLayoutCallbackTy DataLayoutCallback = [](StringRef, StringRef) {
       return std::nullopt;
     });
 
@@ -201,6 +202,11 @@ Type *parseType(StringRef Asm, SMDiagnostic &Err, const Module &M,
 /// \return null on error.
 Type *parseTypeAtBeginning(StringRef Asm, unsigned &Read, SMDiagnostic &Err,
                            const Module &M, const SlotMapping *Slots = nullptr);
+
+DIExpression *parseDIExpressionBodyAtBeginning(StringRef Asm, unsigned &Read,
+                                               SMDiagnostic &Err,
+                                               const Module &M,
+                                               const SlotMapping *Slots);
 
 } // End llvm namespace
 

@@ -1,4 +1,4 @@
-//===- TFUtils.h - utilities for tensorflow C API ---------------*- C++ -*-===//
+//===- TFUtils.h - utilities for TFLite -------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -86,14 +86,14 @@ public:
   /// evaluation fails or the model is invalid, or an EvaluationResult
   /// otherwise. The inputs are assumed to have been already provided via
   /// getInput(). When returning std::nullopt, it also invalidates this object.
-  Optional<EvaluationResult> evaluate();
+  std::optional<EvaluationResult> evaluate();
 
   /// Provides access to the input vector.
   template <typename T> T *getInput(size_t Index) {
     return static_cast<T *>(getUntypedInput(Index));
   }
 
-  /// Returns true if the tensorflow model was loaded successfully, false
+  /// Returns true if the model was loaded successfully, false
   /// otherwise.
   bool isValid() const { return !!Impl; }
 

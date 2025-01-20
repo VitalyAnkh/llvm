@@ -23,9 +23,10 @@
 
 namespace llvm {
 
-/// ModelUnderTrainingRunner - training mode implementation. It uses TF C APIs
+/// ModelUnderTrainingRunner - training mode implementation. It uses TFLite
 /// to dynamically load and evaluate a TF SavedModel
-/// (https://www.tensorflow.org/guide/saved_model). Runtime performance is
+/// (https://www.tensorflow.org/guide/saved_model) converted to TFLite. see
+/// lib/Analysis/models/saved-model-to-tflite.py. Runtime performance is
 /// sacrificed for ease of use while training.
 class ModelUnderTrainingRunner final : public MLModelRunner {
 public:
@@ -42,7 +43,7 @@ public:
     return lastEvaluationResult()->getUntypedTensorValue(ExtraOutputIndex + 1);
   }
 
-  const Optional<TFModelEvaluator::EvaluationResult> &
+  const std::optional<TFModelEvaluator::EvaluationResult> &
   lastEvaluationResult() const {
     return LastEvaluationResult;
   }
@@ -68,7 +69,7 @@ private:
   std::unique_ptr<TFModelEvaluator> Evaluator;
   const std::vector<TensorSpec> OutputSpecs;
   const std::vector<TensorSpec> ExtraOutputsForLogging;
-  Optional<TFModelEvaluator::EvaluationResult> LastEvaluationResult;
+  std::optional<TFModelEvaluator::EvaluationResult> LastEvaluationResult;
   void *evaluateUntyped() override;
 };
 

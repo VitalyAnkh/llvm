@@ -67,7 +67,9 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Pass.h"
 
+#include <set>
 #include <unordered_map>
 
 #define DEBUG_TYPE "LowerESIMDSlmAllocPass"
@@ -80,35 +82,36 @@ namespace {
 constexpr int DebugLevel = 0;
 #endif
 
-constexpr char SLM_ALLOC_PREFIX[] = "_Z17__esimd_slm_alloc";
-constexpr char SLM_FREE_PREFIX[] = "_Z16__esimd_slm_free";
-constexpr char SLM_INIT_PREFIX[] = "_Z16__esimd_slm_init";
+bool isGenXSLMInit(const Function &F) {
+  constexpr char SLM_INIT_PREFIX[] = "llvm.genx.slm.init";
+  return F.getName().starts_with(SLM_INIT_PREFIX);
+}
 
 bool isSlmInitCall(const CallInst *CI) {
-  if (!CI) {
+  if (!CI)
     return false;
-  }
   Function *F = CI->getCalledFunction();
-  return F && F->getName().startswith(SLM_INIT_PREFIX);
+  if (!F)
+    return false;
+  assert(!esimd::isSlmInit(*F) && "Should have been translated already");
+  return isGenXSLMInit(*F);
 }
 
 bool isSlmAllocCall(const CallInst *CI) {
-  if (!CI) {
+  if (!CI)
     return false;
-  }
   Function *F = CI->getCalledFunction();
-  return F && F->getName().startswith(SLM_ALLOC_PREFIX);
+  return F && esimd::isSlmAlloc(*F);
 }
 
 // Checks if given call is a call to '__esimd_slm_free' function, and if yes,
 // finds the corresponding '__esimd_slm_alloc' call and returns it.
 CallInst *isSlmFreeCall(const CallInst *CI) {
-  if (!CI) {
+  if (!CI)
     return nullptr;
-  }
-  Function *F = CI->getCalledFunction();
 
-  if (!F || !F->getName().startswith(SLM_FREE_PREFIX))
+  Function *F = CI->getCalledFunction();
+  if (!F || !esimd::isSlmFree(*F))
     return nullptr;
   Value *Arg = CI->getArgOperand(0);
 
@@ -144,7 +147,7 @@ int getSLMUsage(const CallInst *SLMReserveCall) {
         SLMReserveCall->getFunction()->getName());
     return -1;
   }
-  size_t Res = cast<llvm::ConstantInt>(ArgV)->getZExtValue();
+  int64_t Res = cast<llvm::ConstantInt>(ArgV)->getZExtValue();
   assert(Res < std::numeric_limits<int>::max());
   return static_cast<int>(Res);
 }
@@ -336,6 +339,14 @@ public:
       // Do preorder traversal so that successors are visited after the parent.
       while (Wl.size() > 0) {
         BasicBlock *BB = Wl.pop_back_val();
+
+        // If we have already visited this BB but it
+        // made it into the worklist, that means this BB
+        // has multiple predecessors. We already processed the first one
+        // so just skip it.
+        if (Visited.contains(BB))
+          continue;
+
         Visited.insert(BB);
 
         for (Instruction &I : *BB) {
@@ -349,6 +360,7 @@ public:
             continue;
           }
           if (CallInst *ScopeStartCI = IsScopeEnd(&I)) {
+            (void)ScopeStartCI;
             ScopeMet = true;
             // Scope end marker encountered - verify all enclosed scopes have
             // ended and truncate current scope path to the enclosing node.
@@ -541,9 +553,23 @@ TraversalResult findMaxSLMUsageAlongAllPaths(const ScopedCallGraph::Node *Cur,
   return Res;
 }
 
-size_t lowerSLMReservationCalls(Module &M) {
+PreservedAnalyses
+ESIMDLowerSLMReservationCalls::run(Module &M, ModuleAnalysisManager &MAM) {
   // Create a detailed "scoped" call graph. Scope start/end is marked with
   // x = __esimd_slm_alloc / __esimd_slm_free(x)
+  //
+  // The alternative version may appears when inlining is off:
+  //   %slm_obj = ...
+  //   call spir_func void slm_allocator(%slm_obj)
+  //   ...
+  //   call spir_func void ~slm_allocator(%slm_obj)
+  // This second variant though is automatically converted to the first one
+  // by enforcing always-inliner pass started before this SLM reservation.
+  // TODO: enforcing the inlining helps to simplify the alloc/free pattern
+  // recognition, but even with inlining the use-def chains may be too complex
+  // especially with -O0. So, some extra work is needed for -O0 to enable
+  // usage of slm_allocator().
+
   ScopedCallGraph SCG(M);
 #ifndef NDEBUG
   if (DebugLevel > 0) {
@@ -552,7 +578,7 @@ size_t lowerSLMReservationCalls(Module &M) {
 #endif
   if (SCG.getNumSLMScopes() == 0) {
     // Early bail out if nothing to analyze.
-    return 0;
+    return PreservedAnalyses::none();
   }
   // Use the detailed call graph nodes to calculate maximum possible SLM usage
   // at any "scope start" node, and record this info in the result map.
@@ -635,6 +661,12 @@ size_t lowerSLMReservationCalls(Module &M) {
   // - now set each kernel's SLMSize metadata to the pre-calculated value
   for (auto &E : Kernel2MaxSLM) {
     int MaxSLM = E.second;
+    // Clamp negative values to 0. MaxSLM could have been not estimated, e.g.
+    // due to having __esimd_slm_init with non-const operand (specialization
+    // constant case). VC backend will use size provided in __esimd_slm_init
+    // if it is greater than value provided in metadata.
+    if (MaxSLM < 0)
+      MaxSLM = 0;
     llvm::Value *MaxSLMv =
         llvm::ConstantInt::get(Type::getInt32Ty(M.getContext()), MaxSLM);
     const Function *Kernel = E.first;
@@ -648,7 +680,8 @@ size_t lowerSLMReservationCalls(Module &M) {
 #endif
   }
   // Return the number of API calls transformed.
-  return SLMAllocCallCnt;
+  return SLMAllocCallCnt == 0 ? PreservedAnalyses::none()
+                              : PreservedAnalyses::all();
 }
 
 } // namespace llvm

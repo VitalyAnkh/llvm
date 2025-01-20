@@ -135,7 +135,7 @@ multiclass Zn2WriteResPair<X86FoldableSchedWrite SchedRW,
   // Register variant takes 1-cycle on Execution Port.
   def : WriteRes<SchedRW, ExePorts> {
     let Latency = Lat;
-    let ResourceCycles = Res;
+    let ReleaseAtCycles = Res;
     let NumMicroOps = UOps;
   }
 
@@ -143,7 +143,7 @@ multiclass Zn2WriteResPair<X86FoldableSchedWrite SchedRW,
   // adds LoadLat cycles to the latency (default = 4).
   def : WriteRes<SchedRW.Folded, !listconcat([Zn2AGU], ExePorts)> {
     let Latency = !add(Lat, LoadLat);
-    let ResourceCycles = !if(!empty(Res), [], !listconcat([1], Res));
+    let ReleaseAtCycles = !if(!empty(Res), [], !listconcat([1], Res));
     let NumMicroOps = !add(UOps, LoadUOps);
   }
 }
@@ -156,7 +156,7 @@ multiclass Zn2WriteResFpuPair<X86FoldableSchedWrite SchedRW,
   // Register variant takes 1-cycle on Execution Port.
   def : WriteRes<SchedRW, ExePorts> {
     let Latency = Lat;
-    let ResourceCycles = Res;
+    let ReleaseAtCycles = Res;
     let NumMicroOps = UOps;
   }
 
@@ -164,7 +164,7 @@ multiclass Zn2WriteResFpuPair<X86FoldableSchedWrite SchedRW,
   // adds LoadLat cycles to the latency (default = 7).
   def : WriteRes<SchedRW.Folded, !listconcat([Zn2AGU], ExePorts)> {
     let Latency = !add(Lat, LoadLat);
-    let ResourceCycles = !if(!empty(Res), [], !listconcat([1], Res));
+    let ReleaseAtCycles = !if(!empty(Res), [], !listconcat([1], Res));
     let NumMicroOps = !add(UOps, LoadUOps);
   }
 }
@@ -222,14 +222,15 @@ defm : X86WriteRes<WriteBitTestSet,      [Zn2ALU], 2, [1], 2>;
 defm : Zn2WriteResPair<WriteBSF, [Zn2ALU], 3, [12], 6, 4, 2>;
 defm : Zn2WriteResPair<WriteBSR, [Zn2ALU], 4, [16], 6, 4, 2>;
 defm : Zn2WriteResPair<WriteLZCNT,          [Zn2ALU], 1>;
-defm : Zn2WriteResPair<WriteTZCNT,          [Zn2ALU], 2>;
+defm : Zn2WriteResPair<WriteTZCNT,          [Zn2ALU], 2, [2], 2, 4, 0>;
 defm : Zn2WriteResPair<WritePOPCNT,         [Zn2ALU], 1>;
 
 // Treat misc copies as a move.
 def : InstRW<[WriteMove], (instrs COPY)>;
 
 // BMI1 BEXTR, BMI2 BZHI
-defm : Zn2WriteResPair<WriteBEXTR, [Zn2ALU], 1>;
+defm : Zn2WriteResPair<WriteBEXTR, [Zn2ALU], 1, [1], 1, 4, 1>;
+defm : Zn2WriteResPair<WriteBLS,   [Zn2ALU], 2, [2], 2, 4, 1>;
 defm : Zn2WriteResPair<WriteBZHI,  [Zn2ALU], 1>;
 
 // IDIV
@@ -453,12 +454,12 @@ defm : Zn2WriteResFpuPair<WriteVecInsert,   [Zn2FPU],   1>;
 
 def : WriteRes<WriteVecExtract, [Zn2FPU12, Zn2FPU2]> {
   let Latency = 2;
-  let ResourceCycles = [1, 2];
+  let ReleaseAtCycles = [1, 2];
 }
 def : WriteRes<WriteVecExtractSt, [Zn2AGU, Zn2FPU12, Zn2FPU2]> {
   let Latency = 5;
   let NumMicroOps = 2;
-  let ResourceCycles = [1, 2, 3];
+  let ReleaseAtCycles = [1, 2, 3];
 }
 
 // MOVMSK Instructions.
@@ -469,7 +470,7 @@ def : WriteRes<WriteVecMOVMSK, [Zn2FPU2]>;
 def : WriteRes<WriteVecMOVMSKY, [Zn2FPU2]> {
   let NumMicroOps = 2;
   let Latency = 2;
-  let ResourceCycles = [2];
+  let ReleaseAtCycles = [2];
 }
 
 // AES Instructions.
@@ -558,7 +559,7 @@ def Zn2WritePUSH : SchedWriteRes<[Zn2AGU]>{
 }
 def : InstRW<[Zn2WritePUSH], (instregex "PUSH(16|32)rmm")>;
 
-//PUSHF
+// PUSHF
 def : InstRW<[WriteMicrocoded], (instregex "PUSHF(16|32)")>;
 
 // PUSHA.
@@ -712,12 +713,6 @@ def Zn2WriteBTRSCm : SchedWriteRes<[Zn2AGU, Zn2ALU]> {
 // m,r,i.
 def : SchedAlias<WriteBitTestSetImmRMW, Zn2WriteBTRSCm>;
 def : SchedAlias<WriteBitTestSetRegRMW, Zn2WriteBTRSCm>;
-
-// BLSI BLSMSK BLSR.
-// r,r.
-def : SchedAlias<WriteBLS, Zn2WriteALULat2>;
-// r,m.
-def : SchedAlias<WriteBLSLd, Zn2WriteALULat2Ld>;
 
 // PDEP PEXT.
 // r,r,r.
@@ -884,7 +879,7 @@ def Zn2WriteFPU03 : SchedWriteRes<[Zn2AGU, Zn2FPU03]>
 {
   let Latency = 12;
   let NumMicroOps = 2;
-  let ResourceCycles = [1,3];
+  let ReleaseAtCycles = [1,3];
 }
 
 // FICOM(P).
@@ -925,12 +920,12 @@ def : InstRW<[Zn2WriteFPU01Y], (instrs VPBLENDDYrri)>;
 def Zn2WriteFPU01Op2 : SchedWriteRes<[Zn2AGU, Zn2FPU01]> {
   let NumMicroOps = 2;
   let Latency = 8;
-  let ResourceCycles = [1, 2];
+  let ReleaseAtCycles = [1, 2];
 }
 def Zn2WriteFPU01Op2Y : SchedWriteRes<[Zn2AGU, Zn2FPU01]> {
   let NumMicroOps = 2;
   let Latency = 9;
-  let ResourceCycles = [1, 3];
+  let ReleaseAtCycles = [1, 3];
 }
 def : InstRW<[Zn2WriteFPU01Op2], (instrs VPBLENDDrmi)>;
 def : InstRW<[Zn2WriteFPU01Op2Y], (instrs VPBLENDDYrmi)>;
@@ -953,7 +948,7 @@ def : InstRW<[WriteMicrocoded], (instregex "VPMASKMOV(D|Q)(Y?)mr")>;
 def Zn2WriteVPBROADCAST128Ld : SchedWriteRes<[Zn2AGU, Zn2FPU12]> {
   let Latency = 8;
   let NumMicroOps = 2;
-  let ResourceCycles = [1, 2];
+  let ReleaseAtCycles = [1, 2];
 }
 def : InstRW<[Zn2WriteVPBROADCAST128Ld],
                                      (instregex "VPBROADCAST(B|W)rm")>;
@@ -962,7 +957,7 @@ def : InstRW<[Zn2WriteVPBROADCAST128Ld],
 def Zn2WriteVPBROADCAST256Ld : SchedWriteRes<[Zn2AGU, Zn2FPU1]> {
   let Latency = 8;
   let NumMicroOps = 2;
-  let ResourceCycles = [1, 2];
+  let ReleaseAtCycles = [1, 2];
 }
 def : InstRW<[Zn2WriteVPBROADCAST256Ld],
                                      (instregex "VPBROADCAST(B|W)Yrm")>;
@@ -999,48 +994,57 @@ def : InstRW<[Zn2WritePCMPGTQYm], (instrs VPCMPGTQYrm)>;
 //-- Move instructions --//
 
 // VPERM2F128 / VPERM2I128.
-def : InstRW<[WriteMicrocoded], (instrs VPERM2F128rr,
-                                        VPERM2I128rr)>;
-def : InstRW<[WriteMicrocoded], (instrs VPERM2F128rm,
-                                        VPERM2I128rm)>;
+def Zn2WriteVPERM2r : SchedWriteRes<[Zn2FPU2]> {
+  let NumMicroOps = 1;
+  let Latency = 3;
+}
+def : InstRW<[Zn2WriteVPERM2r], (instrs VPERM2F128rri,
+                                        VPERM2I128rri)>;
+
+def Zn2WriteVPERM2m : SchedWriteRes<[Zn2AGU, Zn2FPU2]> {
+  let NumMicroOps = 1;
+  let Latency = 8;
+}
+def : InstRW<[Zn2WriteVPERM2m], (instrs VPERM2F128rmi,
+                                        VPERM2I128rmi)>;
 
 def Zn2WriteBROADCAST : SchedWriteRes<[Zn2AGU, Zn2FPU13]> {
   let NumMicroOps = 2;
   let Latency = 8;
 }
 // VBROADCASTF128 / VBROADCASTI128.
-def : InstRW<[Zn2WriteBROADCAST], (instrs VBROADCASTF128,
-                                          VBROADCASTI128)>;
+def : InstRW<[Zn2WriteBROADCAST], (instrs VBROADCASTF128rm,
+                                          VBROADCASTI128rm)>;
 
 // EXTRACTPS.
 // r32,x,i.
 def Zn2WriteEXTRACTPSr : SchedWriteRes<[Zn2FPU12, Zn2FPU2]> {
   let Latency = 2;
-  let NumMicroOps = 2; 
-  let ResourceCycles = [1, 2];
+  let NumMicroOps = 2;
+  let ReleaseAtCycles = [1, 2];
 }
-def : InstRW<[Zn2WriteEXTRACTPSr], (instregex "(V?)EXTRACTPSrr")>;
+def : InstRW<[Zn2WriteEXTRACTPSr], (instregex "(V?)EXTRACTPSrri")>;
 
 def Zn2WriteEXTRACTPSm : SchedWriteRes<[Zn2AGU,Zn2FPU12, Zn2FPU2]> {
   let Latency = 5;
   let NumMicroOps = 2;
-  let ResourceCycles = [5, 1, 2];
+  let ReleaseAtCycles = [5, 1, 2];
 }
 // m32,x,i.
-def : InstRW<[Zn2WriteEXTRACTPSm], (instregex "(V?)EXTRACTPSmr")>;
+def : InstRW<[Zn2WriteEXTRACTPSm], (instregex "(V?)EXTRACTPSmri")>;
 
 // VEXTRACTF128 / VEXTRACTI128.
 // x,y,i.
-def : InstRW<[Zn2WriteFPU013], (instrs VEXTRACTF128rr,
-                                       VEXTRACTI128rr)>;
+def : InstRW<[Zn2WriteFPU013], (instrs VEXTRACTF128rri,
+                                       VEXTRACTI128rri)>;
 
 // m128,y,i.
-def : InstRW<[Zn2WriteFPU013m], (instrs VEXTRACTF128mr,
-                                        VEXTRACTI128mr)>;
+def : InstRW<[Zn2WriteFPU013m], (instrs VEXTRACTF128mri,
+                                        VEXTRACTI128mri)>;
 
 def Zn2WriteVINSERT128r: SchedWriteRes<[Zn2FPU013]> {
   let Latency = 2;
-//  let ResourceCycles = [2];
+//  let ReleaseAtCycles = [2];
 }
 def Zn2WriteVINSERT128Ld: SchedWriteRes<[Zn2AGU,Zn2FPU013]> {
   let Latency = 9;
@@ -1048,10 +1052,10 @@ def Zn2WriteVINSERT128Ld: SchedWriteRes<[Zn2AGU,Zn2FPU013]> {
 }
 // VINSERTF128 / VINSERTI128.
 // y,y,x,i.
-def : InstRW<[Zn2WriteVINSERT128r], (instrs VINSERTF128rr,
-                                            VINSERTI128rr)>;
-def : InstRW<[Zn2WriteVINSERT128Ld], (instrs VINSERTF128rm,
-                                             VINSERTI128rm)>;
+def : InstRW<[Zn2WriteVINSERT128r], (instrs VINSERTF128rri,
+                                            VINSERTI128rri)>;
+def : InstRW<[Zn2WriteVINSERT128Ld], (instrs VINSERTF128rmi,
+                                             VINSERTI128rmi)>;
 
 // VGATHER.
 def : InstRW<[WriteMicrocoded], (instregex "VGATHER(Q|D)(PD|PS)(Y?)rm")>;
@@ -1129,7 +1133,7 @@ def : SchedAlias<WriteCvtSS2SD, Zn2WriteCVTSS2SDr>;
 def Zn2WriteCVTSS2SDLd : SchedWriteRes<[Zn2AGU, Zn2FPU3]> {
   let Latency = 10;
   let NumMicroOps = 2;
-  let ResourceCycles = [1, 2];
+  let ReleaseAtCycles = [1, 2];
 }
 def : SchedAlias<WriteCvtSS2SDLd, Zn2WriteCVTSS2SDLd>;
 
@@ -1325,9 +1329,6 @@ def : SchedAlias<WriteDPPDLd, Zn2WriteMicrocoded>;
 
 // VZEROUPPER.
 def : InstRW<[WriteALU], (instrs VZEROUPPER)>;
-
-// VZEROALL.
-def : InstRW<[WriteMicrocoded], (instrs VZEROALL)>;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Dependency breaking instructions.

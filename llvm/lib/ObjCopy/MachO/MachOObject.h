@@ -9,7 +9,6 @@
 #ifndef LLVM_LIB_OBJCOPY_MACHO_MACHOOBJECT_H
 #define LLVM_LIB_OBJCOPY_MACHO_MACHOOBJECT_H
 
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/MC/StringTableBuilder.h"
@@ -120,8 +119,8 @@ struct SymbolEntry {
   }
 
   bool isSwiftSymbol() const {
-    return StringRef(Name).startswith("_$s") ||
-           StringRef(Name).startswith("_$S");
+    return StringRef(Name).starts_with("_$s") ||
+           StringRef(Name).starts_with("_$S");
   }
 
   std::optional<uint32_t> section() const {
@@ -143,6 +142,7 @@ struct SymbolTable {
 
   const SymbolEntry *getSymbolByIndex(uint32_t Index) const;
   SymbolEntry *getSymbolByIndex(uint32_t Index);
+  void updateSymbols(function_ref<void(SymbolEntry &)> Callable);
   void removeSymbols(
       function_ref<bool(const std::unique_ptr<SymbolEntry> &)> ToRemove);
 };

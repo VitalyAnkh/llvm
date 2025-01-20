@@ -7,13 +7,13 @@ target triple = "x86_64-apple-macosx10.14.0"
 @G = external dso_local global i32, align 4
 
 define void @foo(i32) {
-; REUSE-LABEL: define {{[^@]+}}@foo(
+; REUSE-LABEL: @foo(
 ; REUSE-NEXT:    [[TMP2:%.*]] = icmp eq i32 [[TMP0:%.*]], 0
 ; REUSE-NEXT:    tail call void @_Z10sideeffectv()
 ; REUSE-NEXT:    br i1 [[TMP2]], label [[CODEREPL:%.*]], label [[EXIT:%.*]]
 ; REUSE:       codeRepl:
 ; REUSE-NEXT:    call void @foo.cold.1() #[[ATTR2:[0-9]+]]
-; REUSE-NEXT:    ret void
+; REUSE-NEXT:    unreachable
 ; REUSE:       exit:
 ; REUSE-NEXT:    ret void
 ;
@@ -31,13 +31,13 @@ exit:
 }
 
 define void @bar(i32) {
-; REUSE-LABEL: define {{[^@]+}}@bar(
+; REUSE-LABEL: @bar(
 ; REUSE-NEXT:    [[TMP2:%.*]] = icmp eq i32 [[TMP0:%.*]], 0
 ; REUSE-NEXT:    tail call void @_Z10sideeffectv()
 ; REUSE-NEXT:    br i1 [[TMP2]], label [[CODEREPL:%.*]], label [[EXIT:%.*]]
 ; REUSE:       codeRepl:
 ; REUSE-NEXT:    call void @bar.cold.1() #[[ATTR2]]
-; REUSE-NEXT:    ret void
+; REUSE-NEXT:    unreachable
 ; REUSE:       exit:
 ; REUSE-NEXT:    ret void
 ;
@@ -54,5 +54,5 @@ exit:
   ret void
 }
 
-declare void @llvm.trap() noreturn cold
+declare void @llvm.trap() noreturn cold memory(inaccessiblemem: write)
 declare void @_Z10sideeffectv()

@@ -44,6 +44,7 @@ set(LLVM_LINK_COMPONENTS
   AllTargetsInfos
   FrontendOpenMP
   Option
+  TargetParser
   )
 
 set(COMPLETIONMODEL_SOURCES)
@@ -58,8 +59,9 @@ if(MSVC AND NOT CLANG_CL)
 endif()
 
 include_directories(BEFORE "${CMAKE_CURRENT_BINARY_DIR}/../clang-tidy")
+include_directories(BEFORE "${CMAKE_CURRENT_SOURCE_DIR}/../include-cleaner/include")
 
-add_clang_library(clangDaemon
+add_clang_library(clangDaemon STATIC
   AST.cpp
   ASTSignals.cpp
   ClangdLSPServer.cpp
@@ -95,12 +97,14 @@ add_clang_library(clangDaemon
   IncludeFixer.cpp
   InlayHints.cpp
   JSONTransport.cpp
+  ModulesBuilder.cpp
   PathMapping.cpp
   Protocol.cpp
   Quality.cpp
   ParsedAST.cpp
   Preamble.cpp
   RIFF.cpp
+  ScanningProjectModules.cpp
   Selection.cpp
   SemanticHighlighting.cpp
   SemanticSelection.cpp
@@ -146,6 +150,7 @@ add_clang_library(clangDaemon
 
   DEPENDS
   omp_gen
+  ClangDriverOptions
   )
 
 # Include generated CompletionModel headers.
@@ -158,6 +163,7 @@ clang_target_link_libraries(clangDaemon
   clangAST
   clangASTMatchers
   clangBasic
+  clangDependencyScanning
   clangDriver
   clangFormat
   clangFrontend
@@ -176,11 +182,11 @@ target_link_libraries(clangDaemon
   PRIVATE
   ${LLVM_PTHREAD_LIB}
 
+  clangIncludeCleaner
   clangTidy
+  clangTidyUtils
 
   clangdSupport
-
-  clangPseudo
   )
 if(CLANGD_TIDY_CHECKS)
   target_link_libraries(clangDaemon PRIVATE ${ALL_CLANG_TIDY_CHECKS})

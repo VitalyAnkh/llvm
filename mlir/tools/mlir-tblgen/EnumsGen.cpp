@@ -26,10 +26,9 @@
 using llvm::formatv;
 using llvm::isDigit;
 using llvm::PrintFatalError;
-using llvm::raw_ostream;
 using llvm::Record;
 using llvm::RecordKeeper;
-using llvm::StringRef;
+using namespace mlir;
 using mlir::tblgen::Attribute;
 using mlir::tblgen::EnumAttr;
 using mlir::tblgen::EnumAttrCase;
@@ -97,8 +96,29 @@ struct FieldParser<{0}, {0}> {{
       return parser.emitError(loc, "expected keyword for {2}");
 
     // Symbolize the keyword.
-    if (::llvm::Optional<{0}> attr = {1}::symbolizeEnum<{0}>(enumKeyword))
+    if (::std::optional<{0}> attr = {1}::symbolizeEnum<{0}>(enumKeyword))
       return *attr;
+    return parser.emitError(loc, "invalid {2} specification: ") << enumKeyword;
+  }
+};
+
+/// Support for std::optional, useful in attribute/type definition where the enum is
+/// used as:
+///
+///    let parameters = (ins OptionalParameter<"std::optional<TheEnumName>">:$value);
+template<>
+struct FieldParser<std::optional<{0}>, std::optional<{0}>> {{
+  template <typename ParserT>
+  static FailureOr<std::optional<{0}>> parse(ParserT &parser) {{
+    // Parse the keyword/string containing the enum.
+    std::string enumKeyword;
+    auto loc = parser.getCurrentLocation();
+    if (failed(parser.parseOptionalKeywordOrString(&enumKeyword)))
+      return std::optional<{0}>{{};
+
+    // Symbolize the keyword.
+    if (::std::optional<{0}> attr = {1}::symbolizeEnum<{0}>(enumKeyword))
+      return attr;
     return parser.emitError(loc, "invalid {2} specification: ") << enumKeyword;
   }
 };
@@ -123,7 +143,7 @@ inline ::llvm::raw_ostream &operator<<(::llvm::raw_ostream &p, {0} value) {{
   // case value to determine when to print in the string form.
   if (nonKeywordCases.any()) {
     os << "  switch (value) {\n";
-    for (auto &it : llvm::enumerate(cases)) {
+    for (auto it : llvm::enumerate(cases)) {
       if (nonKeywordCases.test(it.index()))
         continue;
       StringRef symbol = it.value().getSymbol();
@@ -139,7 +159,7 @@ inline ::llvm::raw_ostream &operator<<(::llvm::raw_ostream &p, {0} value) {{
     // is not a power of two (i.e. not a single bit case) and not a known case.
   } else if (enumAttr.isBitEnum()) {
     // Process the known multi-bit cases that use valid keywords.
-    llvm::SmallVector<EnumAttrCase *> validMultiBitCases;
+    SmallVector<EnumAttrCase *> validMultiBitCases;
     for (auto [index, caseVal] : llvm::enumerate(cases)) {
       uint64_t value = caseVal.getValue();
       if (value && !llvm::has_single_bit(value) && !nonKeywordCases.test(index))
@@ -227,7 +247,7 @@ static void emitMaxValueFn(const Record &enumDef, raw_ostream &os) {
 
 // Returns the EnumAttrCase whose value is zero if exists; returns std::nullopt
 // otherwise.
-static llvm::Optional<EnumAttrCase>
+static std::optional<EnumAttrCase>
 getAllBitsUnsetCase(llvm::ArrayRef<EnumAttrCase> cases) {
   for (auto attrCase : cases) {
     if (attrCase.getValue() == 0)
@@ -381,9 +401,9 @@ static void emitStrToSymFnForIntEnum(const Record &enumDef, raw_ostream &os) {
   StringRef strToSymFnName = enumAttr.getStringToSymbolFnName();
   auto enumerants = enumAttr.getAllCases();
 
-  os << formatv("::llvm::Optional<{0}> {1}(::llvm::StringRef str) {{\n",
+  os << formatv("::std::optional<{0}> {1}(::llvm::StringRef str) {{\n",
                 enumName, strToSymFnName);
-  os << formatv("  return ::llvm::StringSwitch<::llvm::Optional<{0}>>(str)\n",
+  os << formatv("  return ::llvm::StringSwitch<::std::optional<{0}>>(str)\n",
                 enumName);
   for (const auto &enumerant : enumerants) {
     auto symbol = enumerant.getSymbol();
@@ -405,7 +425,7 @@ static void emitStrToSymFnForBitEnum(const Record &enumDef, raw_ostream &os) {
   auto enumerants = enumAttr.getAllCases();
   auto allBitsUnsetCase = getAllBitsUnsetCase(enumerants);
 
-  os << formatv("::llvm::Optional<{0}> {1}(::llvm::StringRef str) {{\n",
+  os << formatv("::std::optional<{0}> {1}(::llvm::StringRef str) {{\n",
                 enumName, strToSymFnName);
 
   if (allBitsUnsetCase) {
@@ -425,7 +445,7 @@ static void emitStrToSymFnForBitEnum(const Record &enumDef, raw_ostream &os) {
 
   // Convert each symbol to the bit ordinal and set the corresponding bit.
   os << formatv("    auto bit = "
-                "llvm::StringSwitch<::llvm::Optional<{0}>>(symbol.trim())\n",
+                "llvm::StringSwitch<::std::optional<{0}>>(symbol.trim())\n",
                 underlyingType);
   for (const auto &enumerant : enumerants) {
     // Skip the special enumerant for None.
@@ -456,7 +476,7 @@ static void emitUnderlyingToSymFnForIntEnum(const Record &enumDef,
       }))
     return;
 
-  os << formatv("::llvm::Optional<{0}> {1}({2} value) {{\n", enumName,
+  os << formatv("::std::optional<{0}> {1}({2} value) {{\n", enumName,
                 underlyingToSymFnName,
                 underlyingType.empty() ? std::string("unsigned")
                                        : underlyingType)
@@ -476,7 +496,7 @@ static void emitSpecializedAttrDef(const Record &enumDef, raw_ostream &os) {
   EnumAttr enumAttr(enumDef);
   StringRef enumName = enumAttr.getEnumClassName();
   StringRef attrClassName = enumAttr.getSpecializedAttrClassName();
-  llvm::Record *baseAttrDef = enumAttr.getBaseAttrClass();
+  const Record *baseAttrDef = enumAttr.getBaseAttrClass();
   Attribute baseAttr(baseAttrDef);
 
   // Emit classof method
@@ -516,7 +536,7 @@ static void emitSpecializedAttrDef(const Record &enumDef, raw_ostream &os) {
   os << formatv("  ::mlir::IntegerAttr baseAttr = "
                 "::mlir::IntegerAttr::get(intType, static_cast<{0}>(val));\n",
                 underlyingType);
-  os << formatv("  return baseAttr.cast<{0}>();\n", attrClassName);
+  os << formatv("  return ::llvm::cast<{0}>(baseAttr);\n", attrClassName);
 
   os << "}\n";
 
@@ -539,7 +559,7 @@ static void emitUnderlyingToSymFnForBitEnum(const Record &enumDef,
   auto enumerants = enumAttr.getAllCases();
   auto allBitsUnsetCase = getAllBitsUnsetCase(enumerants);
 
-  os << formatv("::llvm::Optional<{0}> {1}({2} value) {{\n", enumName,
+  os << formatv("::std::optional<{0}> {1}({2} value) {{\n", enumName,
                 underlyingToSymFnName, underlyingType);
   if (allBitsUnsetCase) {
     os << "  // Special case for all bits unset.\n";
@@ -565,7 +585,7 @@ static void emitEnumDecl(const Record &enumDef, raw_ostream &os) {
   StringRef underlyingToSymFnName = enumAttr.getUnderlyingToSymbolFnName();
   auto enumerants = enumAttr.getAllCases();
 
-  llvm::SmallVector<StringRef, 2> namespaces;
+  SmallVector<StringRef, 2> namespaces;
   llvm::SplitString(cppNamespace, namespaces, "::");
 
   for (auto ns : namespaces)
@@ -579,11 +599,11 @@ static void emitEnumDecl(const Record &enumDef, raw_ostream &os) {
         return enumerant.getValue() >= 0;
       })) {
     os << formatv(
-        "::llvm::Optional<{0}> {1}({2});\n", enumName, underlyingToSymFnName,
+        "::std::optional<{0}> {1}({2});\n", enumName, underlyingToSymFnName,
         underlyingType.empty() ? std::string("unsigned") : underlyingType);
   }
   os << formatv("{2} {1}({0});\n", enumName, symToStrFnName, symToStrFnRetType);
-  os << formatv("::llvm::Optional<{0}> {1}(::llvm::StringRef);\n", enumName,
+  os << formatv("::std::optional<{0}> {1}(::llvm::StringRef);\n", enumName,
                 strToSymFnName);
 
   if (enumAttr.isBitEnum()) {
@@ -605,10 +625,10 @@ inline {0} stringifyEnum({1} enumValue) {{
   // specified by the user.
   const char *const symbolizeEnumStr = R"(
 template <typename EnumType>
-::llvm::Optional<EnumType> symbolizeEnum(::llvm::StringRef);
+::std::optional<EnumType> symbolizeEnum(::llvm::StringRef);
 
 template <>
-inline ::llvm::Optional<{0}> symbolizeEnum<{0}>(::llvm::StringRef str) {
+inline ::std::optional<{0}> symbolizeEnum<{0}>(::llvm::StringRef str) {
   return {1}(str);
 }
 )";
@@ -642,11 +662,11 @@ public:
   emitDenseMapInfo(qualName, underlyingType, cppNamespace, os);
 }
 
-static bool emitEnumDecls(const RecordKeeper &recordKeeper, raw_ostream &os) {
-  llvm::emitSourceFileHeader("Enum Utility Declarations", os);
+static bool emitEnumDecls(const RecordKeeper &records, raw_ostream &os) {
+  llvm::emitSourceFileHeader("Enum Utility Declarations", os, records);
 
-  auto defs = recordKeeper.getAllDerivedDefinitionsIfDefined("EnumAttrInfo");
-  for (const auto *def : defs)
+  for (const Record *def :
+       records.getAllDerivedDefinitionsIfDefined("EnumAttrInfo"))
     emitEnumDecl(*def, os);
 
   return false;
@@ -656,7 +676,7 @@ static void emitEnumDef(const Record &enumDef, raw_ostream &os) {
   EnumAttr enumAttr(enumDef);
   StringRef cppNamespace = enumAttr.getCppNamespace();
 
-  llvm::SmallVector<StringRef, 2> namespaces;
+  SmallVector<StringRef, 2> namespaces;
   llvm::SplitString(cppNamespace, namespaces, "::");
 
   for (auto ns : namespaces)
@@ -680,11 +700,11 @@ static void emitEnumDef(const Record &enumDef, raw_ostream &os) {
   os << "\n";
 }
 
-static bool emitEnumDefs(const RecordKeeper &recordKeeper, raw_ostream &os) {
-  llvm::emitSourceFileHeader("Enum Utility Definitions", os);
+static bool emitEnumDefs(const RecordKeeper &records, raw_ostream &os) {
+  llvm::emitSourceFileHeader("Enum Utility Definitions", os, records);
 
-  auto defs = recordKeeper.getAllDerivedDefinitionsIfDefined("EnumAttrInfo");
-  for (const auto *def : defs)
+  for (const Record *def :
+       records.getAllDerivedDefinitionsIfDefined("EnumAttrInfo"))
     emitEnumDef(*def, os);
 
   return false;

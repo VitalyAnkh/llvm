@@ -13,11 +13,11 @@ using namespace llvm;
 
 MCDisassembler::~MCDisassembler() = default;
 
-std::optional<MCDisassembler::DecodeStatus>
-MCDisassembler::onSymbolStart(SymbolInfoTy &Symbol, uint64_t &Size,
-                              ArrayRef<uint8_t> Bytes, uint64_t Address,
-                              raw_ostream &CStream) const {
-  return std::nullopt;
+Expected<bool> MCDisassembler::onSymbolStart(SymbolInfoTy &Symbol,
+                                             uint64_t &Size,
+                                             ArrayRef<uint8_t> Bytes,
+                                             uint64_t Address) const {
+  return false;
 }
 
 uint64_t MCDisassembler::suggestBytesToSkip(ArrayRef<uint8_t> Bytes,
@@ -93,8 +93,8 @@ bool XCOFFSymbolInfoTy::operator<(const XCOFFSymbolInfoTy &SymInfo) const {
     return SymInfo.StorageMappingClass.has_value();
 
   if (StorageMappingClass) {
-    return getSMCPriority(StorageMappingClass.value()) <
-           getSMCPriority(SymInfo.StorageMappingClass.value());
+    return getSMCPriority(*StorageMappingClass) <
+           getSMCPriority(*SymInfo.StorageMappingClass);
   }
 
   return false;

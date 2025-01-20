@@ -12,6 +12,7 @@
 #include "support/Logger.h"
 #include "clang/Tooling/CompilationDatabase.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Config/llvm-config.h" // for LLVM_ON_UNIX
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ScopedPrinter.h"
@@ -325,7 +326,7 @@ TEST(SerializationTest, CmdlTest) {
 // rlimit is part of POSIX. RLIMIT_AS does not exist in OpenBSD.
 // Sanitizers use a lot of address space, so we can't apply strict limits.
 #if LLVM_ON_UNIX && defined(RLIMIT_AS) && !LLVM_ADDRESS_SANITIZER_BUILD &&     \
-    !LLVM_MEMORY_SANITIZER_BUILD
+    !LLVM_MEMORY_SANITIZER_BUILD && !LLVM_THREAD_SANITIZER_BUILD
 class ScopedMemoryLimit {
   struct rlimit OriginalLimit;
   bool Succeeded = false;

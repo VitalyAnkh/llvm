@@ -52,44 +52,13 @@ struct CommentInfo {
   CommentInfo(CommentInfo &&Other) = default;
   CommentInfo &operator=(CommentInfo &&Other) = default;
 
-  bool operator==(const CommentInfo &Other) const {
-    auto FirstCI = std::tie(Kind, Text, Name, Direction, ParamName, CloseName,
-                            SelfClosing, Explicit, AttrKeys, AttrValues, Args);
-    auto SecondCI =
-        std::tie(Other.Kind, Other.Text, Other.Name, Other.Direction,
-                 Other.ParamName, Other.CloseName, Other.SelfClosing,
-                 Other.Explicit, Other.AttrKeys, Other.AttrValues, Other.Args);
-
-    if (FirstCI != SecondCI || Children.size() != Other.Children.size())
-      return false;
-
-    return std::equal(Children.begin(), Children.end(), Other.Children.begin(),
-                      llvm::deref<std::equal_to<>>{});
-  }
+  bool operator==(const CommentInfo &Other) const;
 
   // This operator is used to sort a vector of CommentInfos.
   // No specific order (attributes more important than others) is required. Any
   // sort is enough, the order is only needed to call std::unique after sorting
   // the vector.
-  bool operator<(const CommentInfo &Other) const {
-    auto FirstCI = std::tie(Kind, Text, Name, Direction, ParamName, CloseName,
-                            SelfClosing, Explicit, AttrKeys, AttrValues, Args);
-    auto SecondCI =
-        std::tie(Other.Kind, Other.Text, Other.Name, Other.Direction,
-                 Other.ParamName, Other.CloseName, Other.SelfClosing,
-                 Other.Explicit, Other.AttrKeys, Other.AttrValues, Other.Args);
-
-    if (FirstCI < SecondCI)
-      return true;
-
-    if (FirstCI == SecondCI) {
-      return std::lexicographical_compare(
-          Children.begin(), Children.end(), Other.Children.begin(),
-          Other.Children.end(), llvm::deref<std::less<>>());
-    }
-
-    return false;
-  }
+  bool operator<(const CommentInfo &Other) const;
 
   SmallString<16>
       Kind; // Kind of comment (FullComment, ParagraphComment, TextComment,
@@ -135,6 +104,7 @@ struct Reference {
 
   bool mergeable(const Reference &Other);
   void merge(Reference &&I);
+  bool operator<(const Reference &Other) const { return Name < Other.Name; }
 
   /// Returns the path for this Reference relative to CurrentPath.
   llvm::SmallString<64> getRelativeFilePath(const StringRef &CurrentPath) const;
@@ -176,6 +146,8 @@ struct ScopeChildren {
   std::vector<FunctionInfo> Functions;
   std::vector<EnumInfo> Enums;
   std::vector<TypedefInfo> Typedefs;
+
+  void sort();
 };
 
 // A base struct for TypeInfos
@@ -276,6 +248,11 @@ struct Location {
            std::tie(Other.LineNumber, Other.Filename);
   }
 
+  bool operator!=(const Location &Other) const {
+    return std::tie(LineNumber, Filename) !=
+           std::tie(Other.LineNumber, Other.Filename);
+  }
+
   // This operator is used to sort a vector of Locations.
   // No specific order (attributes more important than others) is required. Any
   // sort is enough, the order is only needed to call std::unique after sorting
@@ -301,10 +278,12 @@ struct Info {
 
   virtual ~Info() = default;
 
+  Info &operator=(Info &&Other) = default;
+
   SymbolID USR =
       SymbolID(); // Unique identifier for the decl described by this Info.
-  const InfoType IT = InfoType::IT_default; // InfoType of this particular Info.
-  SmallString<16> Name;                     // Unqualified name of the decl.
+  InfoType IT = InfoType::IT_default; // InfoType of this particular Info.
+  SmallString<16> Name;               // Unqualified name of the decl.
   llvm::SmallVector<Reference, 4>
       Namespace; // List of parent namespaces for this decl.
   std::vector<CommentInfo> Description; // Comment description of this decl.
@@ -321,17 +300,12 @@ struct Info {
 
   /// Returns the basename that should be used for this Info.
   llvm::SmallString<16> getFileBaseName() const;
-
-  // Returns a reference to the parent scope (that is, the immediate parent
-  // namespace or class in which this decl resides).
-  llvm::Expected<Reference> getEnclosingScope();
 };
 
 // Info for namespaces.
 struct NamespaceInfo : public Info {
   NamespaceInfo(SymbolID USR = SymbolID(), StringRef Name = StringRef(),
-                StringRef Path = StringRef())
-      : Info(InfoType::IT_namespace, USR, Name, Path) {}
+                StringRef Path = StringRef());
 
   void merge(NamespaceInfo &&I);
 
@@ -348,6 +322,20 @@ struct SymbolInfo : public Info {
 
   std::optional<Location> DefLoc;     // Location where this decl is defined.
   llvm::SmallVector<Location, 2> Loc; // Locations where this decl is declared.
+
+  bool operator<(const SymbolInfo &Other) const {
+    // Sort by declaration location since we want the doc to be
+    // generated in the order of the source code.
+    // If the declaration location is the same, or not present
+    // we sort by defined location otherwise fallback to the extracted name
+    if (Loc.size() > 0 && Other.Loc.size() > 0 && Loc[0] != Other.Loc[0])
+      return Loc[0] < Other.Loc[0];
+
+    if (DefLoc && Other.DefLoc && *DefLoc != *Other.DefLoc)
+      return *DefLoc < *Other.DefLoc;
+
+    return extractName() < Other.extractName();
+  }
 };
 
 // TODO: Expand to allow for documenting templating and default args.
@@ -381,13 +369,12 @@ struct FunctionInfo : public SymbolInfo {
 // Info for types.
 struct RecordInfo : public SymbolInfo {
   RecordInfo(SymbolID USR = SymbolID(), StringRef Name = StringRef(),
-             StringRef Path = StringRef())
-      : SymbolInfo(InfoType::IT_record, USR, Name, Path) {}
+             StringRef Path = StringRef());
 
   void merge(RecordInfo &&I);
 
   // Type of this record (struct, class, union, interface).
-  TagTypeKind TagType = TagTypeKind::TTK_Struct;
+  TagTypeKind TagType = TagTypeKind::Struct;
 
   // Full qualified name of this record, including namespaces and template
   // specializations.
@@ -434,11 +421,9 @@ struct TypedefInfo : public SymbolInfo {
 };
 
 struct BaseRecordInfo : public RecordInfo {
-  BaseRecordInfo() : RecordInfo() {}
+  BaseRecordInfo();
   BaseRecordInfo(SymbolID USR, StringRef Name, StringRef Path, bool IsVirtual,
-                 AccessSpecifier Access, bool IsParent)
-      : RecordInfo(USR, Name, Path), IsVirtual(IsVirtual), Access(Access),
-        IsParent(IsParent) {}
+                 AccessSpecifier Access, bool IsParent);
 
   // Indicates if base corresponds to a virtual inheritance
   bool IsVirtual = false;
@@ -470,6 +455,8 @@ struct EnumValueInfo {
   // Stores the user-supplied initialization expression for this enumeration
   // constant. This will be empty for implicit enumeration values.
   SmallString<16> ValueExpr;
+
+  std::vector<CommentInfo> Description; /// Comment description of this field.
 };
 
 // TODO: Expand to allow for documenting templating.
@@ -521,8 +508,7 @@ struct ClangDocContext {
   ClangDocContext(tooling::ExecutionContext *ECtx, StringRef ProjectName,
                   bool PublicOnly, StringRef OutDirectory, StringRef SourceRoot,
                   StringRef RepositoryUrl,
-                  std::vector<std::string> UserStylesheets,
-                  std::vector<std::string> JsScripts);
+                  std::vector<std::string> UserStylesheets);
   tooling::ExecutionContext *ECtx;
   std::string ProjectName; // Name of project clang-doc is documenting.
   bool PublicOnly; // Indicates if only public declarations are documented.
@@ -537,8 +523,6 @@ struct ClangDocContext {
   std::vector<std::string> UserStylesheets;
   // JavaScript files that will be imported in allHTML file.
   std::vector<std::string> JsScripts;
-  // Other files that should be copied to OutDirectory, besides UserStylesheets.
-  std::vector<std::string> FilesToCopy;
   Index Idx;
 };
 

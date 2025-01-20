@@ -318,6 +318,7 @@ static void checkARM64Instructions(MCStreamer &Streamer,
     case Win64EH::UOP_TrapFrame:
     case Win64EH::UOP_PushMachFrame:
     case Win64EH::UOP_Context:
+    case Win64EH::UOP_ECContext:
     case Win64EH::UOP_ClearUnwoundToCall:
       // Can't reason about these opcodes and how they map to actual
       // instructions.
@@ -409,6 +410,9 @@ static uint32_t ARM64CountOfUnwindCodes(ArrayRef<WinEH::Instruction> Insns) {
       Count += 1;
       break;
     case Win64EH::UOP_Context:
+      Count += 1;
+      break;
+    case Win64EH::UOP_ECContext:
       Count += 1;
       break;
     case Win64EH::UOP_ClearUnwoundToCall:
@@ -591,6 +595,10 @@ static void ARM64EmitUnwindCode(MCStreamer &streamer,
     break;
   case Win64EH::UOP_Context:
     b = 0xEA;
+    streamer.emitInt8(b);
+    break;
+  case Win64EH::UOP_ECContext:
+    b = 0xEB;
     streamer.emitInt8(b);
     break;
   case Win64EH::UOP_ClearUnwoundToCall:
@@ -1010,6 +1018,7 @@ static bool tryARM64PackedUnwind(WinEH::FrameInfo *info, uint32_t FuncLength,
       return false;
     case Win64EH::UOP_TrapFrame:
     case Win64EH::UOP_Context:
+    case Win64EH::UOP_ECContext:
     case Win64EH::UOP_ClearUnwoundToCall:
     case Win64EH::UOP_PushMachFrame:
       // These are special opcodes that aren't normally generated.
@@ -1089,7 +1098,7 @@ static void ARM64ProcessEpilogs(WinEH::FrameInfo *info,
       FindMatchingEpilog(EpilogInstrs, AddedEpilogs, info);
     int PrologOffset;
     if (MatchingEpilog) {
-      assert(EpilogInfo.find(MatchingEpilog) != EpilogInfo.end() &&
+      assert(EpilogInfo.contains(MatchingEpilog) &&
              "Duplicate epilog not found");
       EpilogInfo[EpilogStart] = EpilogInfo.lookup(MatchingEpilog);
       // Clear the unwind codes in the EpilogMap, so that they don't get output
@@ -1282,9 +1291,9 @@ static void ARM64EmitUnwindInfoForSegment(MCStreamer &streamer,
     // FIXME: We should be able to split unwind info into multiple sections.
     if (CodeWords > 0xFF || EpilogCount > 0xFFFF)
       report_fatal_error(
-          "SEH unwind data splitting is only implemnted for large functions, "
-          "cases of too many code words or too many epilogs will be done later"
-      );
+          "SEH unwind data splitting is only implemented for large functions, "
+          "cases of too many code words or too many epilogs will be done "
+          "later");
     uint32_t row2 = 0x0;
     row2 |= (CodeWords & 0xFF) << 16;
     row2 |= (EpilogCount & 0xFFFF);
@@ -1402,6 +1411,9 @@ static void ARM64EmitUnwindInfo(MCStreamer &streamer, WinEH::FrameInfo *info,
     // here, but we'd have to emit the pdata, the xdata header, and the
     // epilogue scopes later, since they depend on whether the we need to
     // split the unwind data.
+    //
+    // If this is fixed, remove code in AArch64ISelLowering.cpp that
+    // disables loop alignment on Windows.
     RawFuncLength = GetAbsDifference(streamer, info->FuncletOrFuncEnd,
                                      info->Begin);
   }
@@ -2369,7 +2381,7 @@ static void ARMEmitUnwindInfo(MCStreamer &streamer, WinEH::FrameInfo *info,
         FindMatchingEpilog(EpilogInstrs, AddedEpilogs, info);
     int PrologOffset;
     if (MatchingEpilog) {
-      assert(EpilogInfo.find(MatchingEpilog) != EpilogInfo.end() &&
+      assert(EpilogInfo.contains(MatchingEpilog) &&
              "Duplicate epilog not found");
       EpilogInfo[EpilogStart] = EpilogInfo.lookup(MatchingEpilog);
       // Clear the unwind codes in the EpilogMap, so that they don't get output
@@ -2449,7 +2461,7 @@ static void ARMEmitUnwindInfo(MCStreamer &streamer, WinEH::FrameInfo *info,
       else
         OffsetExpr = GetSubDivExpr(streamer, EpilogStart, info->Begin, 2);
 
-      assert(info->EpilogMap.find(EpilogStart) != info->EpilogMap.end());
+      assert(info->EpilogMap.contains(EpilogStart));
       unsigned Condition = info->EpilogMap[EpilogStart].Condition;
       assert(Condition <= 0xf);
 

@@ -30,7 +30,6 @@ AnalysisKey InlineSizeEstimatorAnalysis::Key;
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/MC/MCAsmLayout.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include <algorithm>
@@ -191,8 +190,7 @@ IRToNativeSizeLearning::getFunctionFeatures(Function &F,
   FF[NamedFeatureIndex::IsLocal] = F.hasLocalLinkage();
   FF[NamedFeatureIndex::IsLinkOnceODR] = F.hasLinkOnceODRLinkage();
   FF[NamedFeatureIndex::IsLinkOnce] = F.hasLinkOnceLinkage();
-  FF[NamedFeatureIndex::Blocks] =
-      std::distance(F.getBasicBlockList().begin(), F.getBasicBlockList().end());
+  FF[NamedFeatureIndex::Blocks] = F.size();
   auto &LI = FAM.getResult<LoopAnalysis>(F);
   FF[NamedFeatureIndex::Loops] = std::distance(LI.begin(), LI.end());
   for (auto &L : LI)

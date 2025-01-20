@@ -11,10 +11,10 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/ADT/iterator.h"
 #include "llvm/DebugInfo/DWARF/DWARFExpression.h"
 #include "llvm/Support/Error.h"
+#include "llvm/TargetParser/Triple.h"
 #include <map>
 #include <memory>
 #include <vector>
@@ -164,7 +164,7 @@ public:
   /// instead of from .debug_frame. This is needed for register number
   /// conversion because some register numbers differ between the two sections
   /// for certain architectures like x86.
-  void dump(raw_ostream &OS, const MCRegisterInfo *MRI, bool IsEH) const;
+  void dump(raw_ostream &OS, DIDumpOptions DumpOpts) const;
 
   bool operator==(const UnwindLocation &RHS) const;
 };
@@ -222,7 +222,7 @@ public:
   /// instead of from .debug_frame. This is needed for register number
   /// conversion because some register numbers differ between the two sections
   /// for certain architectures like x86.
-  void dump(raw_ostream &OS, const MCRegisterInfo *MRI, bool IsEH) const;
+  void dump(raw_ostream &OS, DIDumpOptions DumpOpts) const;
 
   /// Returns true if we have any register locations in this object.
   bool hasLocations() const { return !Locations.empty(); }
@@ -303,7 +303,7 @@ public:
   ///
   /// \param IndentLevel specify the indent level as an integer. The UnwindRow
   /// will be output to the stream preceded by 2 * IndentLevel number of spaces.
-  void dump(raw_ostream &OS, const MCRegisterInfo *MRI, bool IsEH,
+  void dump(raw_ostream &OS, DIDumpOptions DumpOpts,
             unsigned IndentLevel = 0) const;
 };
 
@@ -348,7 +348,7 @@ public:
   ///
   /// \param IndentLevel specify the indent level as an integer. The UnwindRow
   /// will be output to the stream preceded by 2 * IndentLevel number of spaces.
-  void dump(raw_ostream &OS, const MCRegisterInfo *MRI, bool IsEH,
+  void dump(raw_ostream &OS, DIDumpOptions DumpOpts,
             unsigned IndentLevel = 0) const;
 
   /// Create an UnwindTable from a Common Information Entry (CIE).
@@ -454,8 +454,8 @@ public:
   /// where a problem occurred in case an error is returned.
   Error parse(DWARFDataExtractor Data, uint64_t *Offset, uint64_t EndOffset);
 
-  void dump(raw_ostream &OS, DIDumpOptions DumpOpts, const MCRegisterInfo *MRI,
-            bool IsEH, unsigned IndentLevel = 1) const;
+  void dump(raw_ostream &OS, DIDumpOptions DumpOpts, unsigned IndentLevel,
+            std::optional<uint64_t> InitialLocation) const;
 
   void addInstruction(const Instruction &I) { Instructions.push_back(I); }
 
@@ -497,7 +497,7 @@ private:
 
   /// Types of operands to CFI instructions
   /// In DWARF, this type is implicitly tied to a CFI instruction opcode and
-  /// thus this type doesn't need to be explictly written to the file (this is
+  /// thus this type doesn't need to be explicitly written to the file (this is
   /// not a DWARF encoding). The relationship of instrs to operand types can
   /// be obtained from getOperandTypes() and is only used to simplify
   /// instruction printing.
@@ -523,9 +523,8 @@ private:
 
   /// Print \p Opcode's operand number \p OperandIdx which has value \p Operand.
   void printOperand(raw_ostream &OS, DIDumpOptions DumpOpts,
-                    const MCRegisterInfo *MRI, bool IsEH,
                     const Instruction &Instr, unsigned OperandIdx,
-                    uint64_t Operand) const;
+                    uint64_t Operand, std::optional<uint64_t> &Address) const;
 };
 
 /// An entry in either debug_frame or eh_frame. This entry can be a CIE or an
@@ -548,8 +547,7 @@ public:
   CFIProgram &cfis() { return CFIs; }
 
   /// Dump the instructions in this CFI fragment
-  virtual void dump(raw_ostream &OS, DIDumpOptions DumpOpts,
-                    const MCRegisterInfo *MRI, bool IsEH) const = 0;
+  virtual void dump(raw_ostream &OS, DIDumpOptions DumpOpts) const = 0;
 
 protected:
   const FrameKind Kind;
@@ -601,12 +599,13 @@ public:
     return PersonalityEnc;
   }
 
+  StringRef getAugmentationData() const { return AugmentationData; }
+
   uint32_t getFDEPointerEncoding() const { return FDEPointerEncoding; }
 
   uint32_t getLSDAPointerEncoding() const { return LSDAPointerEncoding; }
 
-  void dump(raw_ostream &OS, DIDumpOptions DumpOpts, const MCRegisterInfo *MRI,
-            bool IsEH) const override;
+  void dump(raw_ostream &OS, DIDumpOptions DumpOpts) const override;
 
 private:
   /// The following fields are defined in section 6.4.1 of the DWARF standard v4
@@ -641,12 +640,12 @@ public:
   ~FDE() override = default;
 
   const CIE *getLinkedCIE() const { return LinkedCIE; }
+  uint64_t getCIEPointer() const { return CIEPointer; }
   uint64_t getInitialLocation() const { return InitialLocation; }
   uint64_t getAddressRange() const { return AddressRange; }
   std::optional<uint64_t> getLSDAAddress() const { return LSDAAddress; }
 
-  void dump(raw_ostream &OS, DIDumpOptions DumpOpts, const MCRegisterInfo *MRI,
-            bool IsEH) const override;
+  void dump(raw_ostream &OS, DIDumpOptions DumpOpts) const override;
 
   static bool classof(const FrameEntry *FE) { return FE->getKind() == FK_FDE; }
 
@@ -688,7 +687,7 @@ public:
   ~DWARFDebugFrame();
 
   /// Dump the section data into the given stream.
-  void dump(raw_ostream &OS, DIDumpOptions DumpOpts, const MCRegisterInfo *MRI,
+  void dump(raw_ostream &OS, DIDumpOptions DumpOpts,
             std::optional<uint64_t> Offset) const;
 
   /// Parse the section from raw data. \p Data is assumed to contain the whole

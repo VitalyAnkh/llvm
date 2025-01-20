@@ -8,11 +8,10 @@
 
 #pragma once
 
-#include <sycl/detail/defines_elementary.hpp>
-
-#include <climits>
+#include <sycl/detail/defines_elementary.hpp> // for __SYCL_ID_QUERIES_FIT_...
 
 #if __SYCL_ID_QUERIES_FIT_IN_INT__ && __has_builtin(__builtin_assume)
+#include <climits>
 #define __SYCL_ASSUME_INT(x) __builtin_assume((x) <= INT_MAX)
 #else
 #define __SYCL_ASSUME_INT(x)
@@ -40,6 +39,8 @@
 #define __SYCL_TYPE(x)
 #endif
 
-#ifndef SYCL_EXT_ONEAPI_MATRIX_VERSION
-#define SYCL_EXT_ONEAPI_MATRIX_VERSION 4
-#endif // SYCL_EXT_ONEAPI_MATRIX_VERSION
+#if __has_cpp_attribute(clang::builtin_alias)
+#define __SYCL_BUILTIN_ALIAS(x) [[clang::builtin_alias(x)]]
+#else
+#define __SYCL_BUILTIN_ALIAS(x)
+#endif
